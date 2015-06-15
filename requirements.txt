@@ -1,0 +1,4 @@
+# Runtime requirements
+
+httplib2
+paho-mqtt
