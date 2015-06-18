@@ -72,8 +72,8 @@ class MQTTClient(object):
             return False
         return True
 
-    def set_channel(self, channel):
-        self.channel = channel
+    def set_device(self, device):
+        self.device = device
 
     def connect(self):
         try:
