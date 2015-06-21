@@ -5,8 +5,10 @@
 EQ2008库DLL的Ctypes封装
 """
 
-from win32api import *
 from ctypes import *
+from ctypes.wintypes import *
+import win32con
+import win32gui
 
 from libs.winutils import RGB
 
@@ -19,7 +21,7 @@ class _StructPartInfo(Structure):
                 ('iWidth', c_int),
                 ('iHeight', c_int),
                 ('iFrameMode', c_int),
-                ('FrameColor', c_int)]
+                ('FrameColor', COLORREF)]
     def __str__(self):
         return 'iX:%d, iY:%d, iWidth:%d, iHeight:%d, iFrameMode:%d, FrameColor:%d'.format(self.iX,
                                                                                           self.iY,
@@ -80,10 +82,25 @@ api.User_AddBmp.restype = c_bool
 api.User_AddBmpFile.argtypes = [c_int, c_int, c_char_p, _StructMoveSet, c_int]
 api.User_AddBmpFile.restype = c_bool
 
+# 删除节目
+# DLL_API BOOL __stdcall User_DelProgram(int CardNum,int iProgramIndex);
+api.User_DelProgram.argtypes = [c_int, c_int]
+api.User_DelProgram.restype = c_bool
+
+# 删除所有节目
+# DLL_API BOOL __stdcall User_DelAllProgram(int CardNum);
+api.User_DelAllProgram.argtypes = [c_int]
+api.User_DelAllProgram.restype = c_bool
+
 # 发送数据
 # DLL_API BOOL __stdcall User_SendToScreen(int CardNum);
 api.User_SendToScreen.argtypes = [c_int]
 api.User_SendToScreen.restype = c_bool
+
+# 发送节目文件和索引文件
+# DLL_API BOOL __stdcall User_SendFileToScreen(int CardNum,char pSendPath[MAX_PATH],char pIndexPath[MAX_PATH]);
+api.User_SendFileToScreen.argtypes = [c_int, c_char_p, c_char_p]
+api.User_SendFileToScreen.restype = c_bool
 
 # 开机
 # DLL_API BOOL __stdcall User_OpenScreen(int CardNum);
@@ -107,7 +124,7 @@ api.User_RealtimeConnect.restype = c_bool
 
 # 发送数据
 # DLL_API BOOL __stdcall User_RealtimeSendData(int CardNum,int x,int y,int iWidth,int iHeight,HBITMAP hBitmap);
-api.User_RealtimeSendData.argtypes = [c_int, c_int, c_int, c_int, c_int]
+api.User_RealtimeSendData.argtypes = [c_int, c_int, c_int, c_int, HBITMAP]
 api.User_RealtimeSendData.restype = c_bool
 
 # 断开连接
@@ -116,8 +133,54 @@ api.User_RealtimeDisConnect.argtypes = [c_int]
 api.User_RealtimeDisConnect.restype = c_bool
 
 
-#初始化并登录
-api.InitInterface(u"中心服务器地址" , u'上行服务端端口' , u'下行客户端端口')
-api.Login(platformID,userID,password);
-#.....其它操作
-api.Logout(platformID,userID,password); #注销
+def open_screan(card_num):
+    result = api.User_OpenScreen(c_int(card_num))
+    return result.value
+
+# 直接发送BMP图片到LED
+def send_bmp_to_led(card_num, height, weight, bmp_file):
+    c_card_num = c_int(card_num)
+    c_bmp_file = c_char_p(bmp_file)
+    c_program_index = api.User_AddProgram(c_card_num)
+    if c_program_index == 0:
+        return False
+
+    # 初始化区域
+    c_bmp_zone = _StructUserBmp()
+    c_bmp_zone.PartInfo.iX = c_int(0)
+    c_bmp_zone.PartInfo.iY = c_int(0)
+    c_bmp_zone.PartInfo.iWidth = c_int(weight)
+    c_bmp_zone.PartInfo.iHeight = c_int(height)
+    c_bmp_zone.PartInfo.iFrameMode = c_int(0xFF00)
+    c_bmp_zone.PartInfo.FrameColor = COLORREF(RGB(0x00, 0xFF, 0x00))
+
+    # 初始化图形移动设置
+    c_move_set = _StructMoveSet()
+    c_move_set.iActionType = c_int(0)
+    c_move_set.iActionSpeed = c_int(4)
+    c_move_set.bClear = c_bool(True)
+    c_move_set.iHoldTime = c_int(50)
+    c_move_set.iClearSpeed = c_int(4)
+    c_move_set.iClearActionType = c_int(4)
+    c_move_set.iFrameTime = c_int(20)
+
+    # iBMPZoneNum = User_AddBmpZone(g_iCardNum, ref BmpZone, g_iProgramIndex);
+    c_bmp_zone_num = api.User_AddBmpZone(c_card_num, byref(c_bmp_zone), c_program_index)
+
+    # if (false == User_AddBmpFile(g_iCardNum, iBMPZoneNum, strBmpFile, ref MoveSet, g_iProgramIndex))
+    if False == api.User_AddBmpFile(c_card_num, c_bmp_zone_num, c_bmp_file, byref(c_move_set), c_program_index):
+        return False
+
+    # Bitmap bmp  = new Bitmap(pictureBox2.Image,BmpZone.PartInfo.iWidth ,BmpZone.PartInfo.iHeight);
+    icon_flags = win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE
+    h_bitmap = win32gui.LoadImage(0, c_bmp_file, win32con.IMAGE_BITMAP, 0, 0, icon_flags)
+
+    # if (false == User_AddBmp(g_iCardNum, iBMPZoneNum,bmp.GetHbitmap() ,ref MoveSet, g_iProgramIndex))
+    if -1 == api.User_AddBmp(c_card_num, c_bmp_zone_num, h_bitmap, byref(c_move_set), c_program_index):
+        return False
+
+    # 发送数据
+    # if(User_SendToScreen(m_iCardNum)==FALSE)
+    result = api.User_SendToScreen(c_card_num)
+    return result.value
+

@@ -22,41 +22,10 @@ import cairo
 import rsvg
 from PIL import Image
 
-from libs.winutils import RGB
 from libs.base_device import BaseDevice
 from devices.eq2008 import eq2008
 
 logger = logging.getLogger('plugin')
-
-# 直接发送数据到LED
-def send_bmp_to_led(card_num, height, weight):
-    program_index = eq2008.api.User_AddProgram(card_num)
-    if program_index == 0:
-        return False
-
-    # 初始化区域
-    bmp_zone = eq2008._StructUserBmp()
-    bmp_zone.PartInfo.iX = 0
-    bmp_zone.PartInfo.iY = 0
-    bmp_zone.PartInfo.iWidth = weight
-    bmp_zone.PartInfo.iHeight = height
-    bmp_zone.PartInfo.iFrameMode = 0xFF00
-    bmp_zone.PartInfo.FrameColor = RGB(0x00, 0xFF, 0x00)
-
-    # 初始化图形移动设置
-    move_set = eq2008._StructMoveSet()
-    move_set.iActionType = 0
-    move_set.iActionSpeed = 4
-    move_set.bClear = True
-    move_set.iHoldTime = 50
-    move_set.iClearSpeed = 4
-    move_set.iClearActionType = 4
-    move_set.iFrameTime = 20
-
-    zone_num = eq2008.api.User_AddBmpZone(card_num, bmp_zone, program_index)
-
-
-    pass
 
 class LEDQE2008Device(BaseDevice):
     def __init__(self, device_params, devices_file_name, mqtt_client, network_name):
@@ -65,8 +34,13 @@ class LEDQE2008Device(BaseDevice):
         self.server = device_params.get("server", "")
         self.port = device_params.get("port", 0)
         self.card_num = device_params.get("card_num", 0)
+        self.height = device_params.get("height", 0)
+        self.weight = device_params.get("weigth", 0)
         self.svg_file_template = device_params.get("svg_file_template", "")
         self.mqtt_client = mqtt_client
+
+        # 打开屏幕
+        eq2008.api.User_OpenScreen(self.card_num)
 
     @staticmethod
     def check_config(device_params):
@@ -113,25 +87,47 @@ class LEDQE2008Device(BaseDevice):
         template_content = file_svg_template.read()
         svg_template = Template(template_content)
         svg_content = svg_template.render(output_data)
-        img = cairo.ImageSurface(cairo.FORMAT_ARGB32, 640, 480)
-        ctx = cairo.Context(img)
-        handle= rsvg.Handle(None, str(svg_content))
+        svg_img = cairo.ImageSurface(cairo.FORMAT_ARGB32, 640, 480)
+        ctx = cairo.Context(svg_img)
+        handle = rsvg.Handle(None, str(svg_content))
 
         # svg文件生成png
         png_file_name = "%r.png" % device_id
         handle.render_cairo(ctx)
-        img.write_to_png(png_file_name)
+        svg_img.write_to_png(png_file_name)
+
+        # png文件增加白色背景
+        new_png_file_name = "new_%r.png" % device_id
+        png_img = Image.open(png_file_name)
+        length_x, length_y = png_img.size
+        white_bg_img = Image.new('RGBA', png_img.size, (255, 255, 255))
+        white_bg_img.paste(png_img, (0, 0, length_x, length_y), png_img)
+        white_bg_img.save(new_png_file_name)
 
         # png文件生成bmp
         bmp_file_name = "%r.bmp" % device_id
-        img = Image.open(png_file_name)
-        new_img = img.resize((128, 128), Image.BILINEAR)
-        new_img.save(bmp_file_name, "bmp")
+        new_png_img = Image.open(new_png_file_name)
+        # 转换成RGBA格式
+        new_png_img.convert("RGBA")
+        # 分割成RGBA，然后重新组合
+        lenght = len(new_png_img.split())
+        if len(new_png_img.split()) == 4:
+            # prevent IOError: cannot write mode RGBA as BMP
+            r, g, b, a = new_png_img.split()
+            bmp_img = Image.merge("RGB", (r, g, b))
+            bmp_img.save(bmp_file_name)
+        else:
+            new_png_img.save(bmp_file_name)
 
         # bmp文件输出到LED
-
-        # 输出图片
-        pass
+        try:
+            result = eq2008.send_bmp_to_led(self.card_num, self.height, self.weight, bmp_file_name)
+            if result:
+                logger.debug("outpu bmp %s success." % bmp_file_name)
+            else:
+                logger.debug("outpu bmp %s fail." % bmp_file_name)
+        except Exception, e:
+            logger.error("send_bmp_to_led exception: %r" % e)
 
     def isAlive(self):
         return True
